@@ -99,7 +99,7 @@ export const App = () => {
         {playlist.length > 0 && (
           <button
             onClick={handleStartPlaylist}
-            className="text-lg px-3 py-1 text-white rounded"
+            className="text-lg px-3 py-1  rounded"
           >
             ▶
           </button>
