@@ -7,8 +7,14 @@
 import { create } from 'zustand';
 import { v4 as uuidv4 } from 'uuid';
 import * as db from '../db/index.js';
+import { searchSongs } from '../lib/youtube.js';
 
 const RECENTS_CAP = 12;
+
+// Monotonic search generation. Each search() captures the latest value; a newer
+// search()/clearSearch() bumps it so a stale in-flight response can detect it's
+// no longer current and skip applying its results.
+let searchSeq = 0;
 
 /**
  * Prepend an id to a recents list, de-duplicating and capping length.
@@ -60,23 +66,35 @@ export const useLibraryStore = create((set, get) => ({
   },
 
   /**
-   * Run a song search, managing searching/searchError and storing results.
-   *
-   * PHASE 1: the audio-extraction backend has been removed, so this is inert —
-   * it clears results and never hits the network. PHASE 3 replaces the body with
-   * a direct YouTube Data API call (src/lib/youtube.js) using VITE_YOUTUBE_API_KEY,
-   * keeping the same searching/searchError/searchResults contract and the
-   * recordSearch(query) history hook below.
+   * Run a song search via the YouTube Data API (src/lib/youtube.js, keyed by
+   * VITE_YOUTUBE_API_KEY), managing searching/searchError/searchResults. A
+   * generation guard drops stale responses; a successful query is recorded into
+   * the recent-search history. Pasted YouTube links are handled upstream in
+   * LibraryScreen and never reach here.
    */
   async search(q) {
     const query = (q || '').trim();
-    set({ searchResults: [], searching: false, searchError: null });
-    if (!query) return;
-    // Intentionally a no-op until Phase 3 wires up the YouTube Data API.
+    if (!query) {
+      searchSeq += 1; // invalidate any in-flight search
+      set({ searchResults: [], searching: false, searchError: null });
+      return;
+    }
+    const seq = ++searchSeq;
+    set({ searching: true, searchError: null });
+    try {
+      const results = await searchSongs(query);
+      if (seq !== searchSeq) return; // a newer search/clear superseded this one
+      set({ searchResults: results, searching: false });
+      get().recordSearch(query);
+    } catch (err) {
+      if (seq !== searchSeq) return;
+      set({ searchResults: [], searching: false, searchError: err.message || String(err) });
+    }
   },
 
-  /** Clear search results and error. */
+  /** Clear search results and error (also invalidates any in-flight search). */
   clearSearch() {
+    searchSeq += 1;
     set({ searchResults: [], searching: false, searchError: null });
   },
 
@@ -309,6 +327,16 @@ export const useLibraryStore = create((set, get) => ({
   async setCrossfadeMs(ms) {
     const n = Math.max(0, Math.min(12000, Math.round(Number(ms) || 0)));
     const next = await db.putSettings({ crossfadeMs: n });
+    set({ settings: next });
+  },
+
+  /**
+   * Toggle ChromaSync — whether the UI accent color is derived from the current
+   * artwork (on) or stays the fixed emerald base (off). Persisted.
+   * @param {boolean} on
+   */
+  async setChromaSync(on) {
+    const next = await db.putSettings({ chromaSync: !!on });
     set({ settings: next });
   },
 

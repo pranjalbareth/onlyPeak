@@ -31,6 +31,7 @@
 import { useEffect, useRef } from 'react';
 import { createPortal } from 'react-dom';
 import { usePlayerStore } from '../store/playerStore.js';
+import { useLibraryStore } from '../store/libraryStore.js';
 import {
   setupMediaSession,
   updateMetadata,
@@ -90,6 +91,9 @@ export default function PlayerEngine() {
   // muted and unmute the instant it actually reports PLAYING. Once that's
   // happened the origin is "engaged" and later plays start with sound directly.
   const audioUnlockedRef = useRef(false);
+  // Last volume we pushed to the player, so the crossfade envelope only calls
+  // setVolume when the value actually changes (and stays a no-op when off).
+  const lastVolRef = useRef(100);
 
   function bounds() {
     const { currentPeak } = usePlayerStore.getState();
@@ -97,6 +101,27 @@ export default function PlayerEngine() {
       startSec: currentPeak?.startSec || 0,
       endSec: currentPeak?.endSec || 0,
     };
+  }
+
+  // Crossfade as a single-player volume envelope: with one IFrame player we can't
+  // truly overlap two tracks, so instead we fade a peak's audio IN over its first
+  // `crossfadeMs` and OUT over its last `crossfadeMs`. Driven entirely by the
+  // existing poll. When crossfade is off (default) the target is always 100 and
+  // we never touch volume, so the tuned playback path is unchanged. Only runs
+  // after the mobile mute-unlock handshake so it can't fight that.
+  function applyCrossfadeVolume(player, pos, peakLen) {
+    if (!audioUnlockedRef.current) return;
+    const cf = (useLibraryStore.getState().settings?.crossfadeMs || 0) / 1000;
+    let vol = 100;
+    if (cf > 0 && peakLen > 0) {
+      const remaining = peakLen - pos;
+      if (pos < cf) vol = Math.round(Math.max(0, Math.min(1, pos / cf)) * 100);
+      else if (remaining < cf) vol = Math.round(Math.max(0, Math.min(1, remaining / cf)) * 100);
+    }
+    if (vol !== lastVolRef.current) {
+      try { player.setVolume(vol); } catch { /* ignore */ }
+      lastVolRef.current = vol;
+    }
   }
 
   function stopPoll() {
@@ -125,6 +150,9 @@ export default function PlayerEngine() {
     const store = usePlayerStore.getState();
     const pos = t - startSec;
     store.setPosition(pos > 0 ? pos : 0);
+
+    // Crossfade volume envelope (no-op when crossfade is off).
+    applyCrossfadeVolume(player, pos > 0 ? pos : 0, endSec - startSec);
 
     if (endedFiredRef.current) return;
     if (endSec > startSec && t >= endSec - END_EPSILON) {

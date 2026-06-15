@@ -4,7 +4,7 @@
 // values persist through the library store/IndexedDB.
 
 import { useLibraryStore } from '../store/libraryStore.js';
-import { ArrowLeft, Waves, Flame, Clock, Trash2 } from './icons.jsx';
+import { ArrowLeft, Waves, Flame, Clock, Trash2, Sparkles } from './icons.jsx';
 
 export default function SettingsScreen({ onBack }) {
   const settings = useLibraryStore((s) => s.settings);
@@ -12,6 +12,7 @@ export default function SettingsScreen({ onBack }) {
 
   const defaultLen = settings?.defaultPeakLengthSec ?? 20;
   const crossfadeMs = settings?.crossfadeMs ?? 0;
+  const chromaSync = settings?.chromaSync ?? true;
 
   const crossfadeSec = (crossfadeMs / 1000).toFixed(crossfadeMs % 1000 === 0 ? 0 : 1);
 
@@ -81,6 +82,43 @@ export default function SettingsScreen({ onBack }) {
             <p className="mt-1 text-xs text-zinc-500">
               Blend the end of each peak into the next.
             </p>
+          </div>
+        </section>
+
+        {/* Appearance */}
+        <section className="mt-6">
+          <h2 className="mb-3 text-xs font-semibold uppercase tracking-wide text-zinc-500">
+            Appearance
+          </h2>
+          <div className="rounded-2xl border border-zinc-800 bg-zinc-900 p-4">
+            <div className="flex items-center gap-3">
+              <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-zinc-800 text-emerald-400">
+                <Sparkles size={20} />
+              </span>
+              <div className="min-w-0 flex-1">
+                <p className="text-sm font-medium">ChromaSync</p>
+                <p className="text-xs text-zinc-400">
+                  Tint the player with a color drawn from the current artwork.
+                </p>
+              </div>
+              {/* Toggle switch */}
+              <button
+                type="button"
+                role="switch"
+                aria-checked={chromaSync}
+                aria-label="Toggle ChromaSync"
+                onClick={() => useLibraryStore.getState().setChromaSync(!chromaSync)}
+                className={`relative inline-flex h-6 w-11 shrink-0 items-center rounded-full transition-colors ${
+                  chromaSync ? 'bg-emerald-500' : 'bg-zinc-700'
+                }`}
+              >
+                <span
+                  className={`inline-block h-5 w-5 transform rounded-full bg-white shadow transition-transform ${
+                    chromaSync ? 'translate-x-[22px]' : 'translate-x-0.5'
+                  }`}
+                />
+              </button>
+            </div>
           </div>
         </section>
 

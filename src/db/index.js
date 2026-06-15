@@ -28,6 +28,7 @@ const DEFAULT_SETTINGS = {
   schemaVersion: 1,
   defaultPeakLengthSec: 20,
   crossfadeMs: 0,
+  chromaSync: true,    // accent color follows the current artwork (ChromaSync)
   lastPlaylistId: null,
   recentPeakIds: [],
   searchHistory: [],   // recent search queries (most-recent first)

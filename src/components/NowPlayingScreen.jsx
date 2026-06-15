@@ -30,9 +30,11 @@ export default function NowPlayingScreen() {
   const shuffle = usePlayerStore((s) => s.shuffle);
 
   const peaksById = useLibraryStore((s) => s.peaksById);
+  const chromaSync = useLibraryStore((s) => s.settings?.chromaSync ?? true);
 
-  // Dynamic accent derived from the current artwork (falls back to emerald).
-  const accent = useAccentColor(currentSong?.thumbnailUrl);
+  // Dynamic accent derived from the current artwork (ChromaSync). When disabled,
+  // pass no url so the hook holds the emerald fallback.
+  const accent = useAccentColor(chromaSync ? currentSong?.thumbnailUrl : null);
 
   if (!expanded) return null;
 
