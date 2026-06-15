@@ -1,41 +1,28 @@
 """
 OnlyPeak personal backend — FastAPI app.
-
 Single-user, no auth (build-spec Section 0/6). All yt-dlp logic lives in
 youtube.py so YouTube breakage stays localized. This module is the HTTP layer:
 search, resolve, a Range-aware audio proxy, and an ffmpeg-based clip endpoint.
-
 Run:
     uvicorn main:app --reload --host 0.0.0.0 --port 8000
 """
-
 import os
 import shutil
 import asyncio
 import tempfile
-
 import httpx
 from fastapi import FastAPI, Query, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, StreamingResponse, FileResponse
 from starlette.background import BackgroundTask
-
 import youtube
-
-
 app = FastAPI(title="OnlyPeak Backend", version="1.0.0")
-
-
 # ---------------------------------------------------------------------------
 # CORS
-# Personal app served from localhost during dev and from a LAN IP on the phone.
-# Allow:
-#   - localhost / 127.0.0.1 on any port
-#   - private LAN ranges on any port:
-#       10.x.x.x
-#       192.168.x.x
-#       172.16.x.x - 172.31.x.x
-# on http or https. allow_origin_regex lets us match "any port" cleanly.
+# Local dev: localhost / 127.0.0.1 / private LAN ranges on any port.
+# Production: the deployed frontend on Vercel, including preview deploys
+#   (only-peak.vercel.app and only-peak-*.vercel.app).
+# allow_origin_regex matches "any port" for LAN and any preview hash for Vercel.
 # ---------------------------------------------------------------------------
 _CORS_REGEX = (
     r"^https?://("
@@ -44,9 +31,9 @@ _CORS_REGEX = (
     r"|10\.\d{1,3}\.\d{1,3}\.\d{1,3}"
     r"|192\.168\.\d{1,3}\.\d{1,3}"
     r"|172\.(1[6-9]|2\d|3[01])\.\d{1,3}\.\d{1,3}"
+    r"|only-peak[a-z0-9-]*\.vercel\.app"
     r")(:\d+)?$"
 )
-
 app.add_middleware(
     CORSMiddleware,
     allow_origin_regex=_CORS_REGEX,
@@ -56,19 +43,14 @@ app.add_middleware(
     # Expose the headers an <audio> element needs to know about for seeking.
     expose_headers=["Content-Range", "Accept-Ranges", "Content-Length", "Content-Type"],
 )
-
-
 # How big a chunk to relay while streaming the audio proxy body.
 _STREAM_CHUNK = 64 * 1024  # 64 KiB
-
-
 # ---------------------------------------------------------------------------
 # Health
 # ---------------------------------------------------------------------------
 @app.get("/api/health")
 async def health():
     return {"ok": True}
-
 
 # ---------------------------------------------------------------------------
 # Search
