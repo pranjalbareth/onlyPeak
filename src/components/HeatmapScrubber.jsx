@@ -24,7 +24,7 @@ import { clampPeak } from '../lib/peakMath.js';
 // regardless of how many raw segments the backend returned.
 const BAR_COUNT = 56;
 const MIN_LEN = 3;
-const MAX_LEN = 60;
+const MAX_LEN = 90;
 
 /**
  * Resample a heatmap onto a fixed-width grid of normalized (0..1) values.

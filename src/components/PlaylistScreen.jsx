@@ -98,6 +98,30 @@ export default function PlaylistScreen({ playlistId, onBack, onEditPeak }) {
     }
   }
 
+  // ---- per-peak offline download / remove ----
+  const [downloadingId, setDownloadingId] = useState(null);
+
+  async function downloadPeak(peakId) {
+    closeMenus();
+    if (downloadingId) return;
+    setDownloadingId(peakId);
+    setCacheMsg(null);
+    try {
+      await useLibraryStore.getState().cachePeak(peakId);
+      setCacheMsg('Saved for offline');
+    } catch (err) {
+      setCacheMsg(err.message || 'Download failed');
+    } finally {
+      setDownloadingId(null);
+    }
+  }
+
+  async function removeDownload(peakId) {
+    closeMenus();
+    await useLibraryStore.getState().uncachePeak(peakId);
+    setCacheMsg('Removed download');
+  }
+
   // ---- overflow menu (which row's menu is open) ----
   const [openMenuId, setOpenMenuId] = useState(null);
   // Row id currently showing the "move to playlist" sub-list.
@@ -392,7 +416,9 @@ export default function PlaylistScreen({ playlistId, onBack, onEditPeak }) {
                     aria-label={peak.cached ? 'Available offline' : 'Streaming only'}
                     title={peak.cached ? 'Available offline' : 'Streaming only'}
                   >
-                    {peak.cached ? (
+                    {downloadingId === peak.id ? (
+                      <Download size={16} className="animate-pulse text-emerald-400" />
+                    ) : peak.cached ? (
                       <Download size={16} className="text-emerald-400" />
                     ) : (
                       <CloudOff size={16} className="text-zinc-600" />
@@ -468,6 +494,19 @@ export default function PlaylistScreen({ playlistId, onBack, onEditPeak }) {
                               label="Edit"
                               onClick={() => editPeak(peak)}
                             />
+                            {peak.cached ? (
+                              <MenuItem
+                                icon={<CloudOff size={16} />}
+                                label="Remove download"
+                                onClick={() => removeDownload(peak.id)}
+                              />
+                            ) : (
+                              <MenuItem
+                                icon={<Download size={16} />}
+                                label={downloadingId === peak.id ? 'Downloading…' : 'Download for offline'}
+                                onClick={() => downloadPeak(peak.id)}
+                              />
+                            )}
                             <MenuItem
                               icon={<ListMusic size={16} />}
                               label="Move to playlist"

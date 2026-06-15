@@ -1,25 +1,23 @@
 // src/components/SearchBar.jsx
 // Pinned search input — the entry point for creating peaks (Section 8, Library).
-// Self-manages its text state; the parent makes the wrapper sticky. Submitting
-// (Enter or the emerald button) bubbles the trimmed query via onSearch.
+// Controlled by the parent (LibraryScreen owns the query text) so other surfaces
+// — recent-search chips, paste-a-URL — can drive it. Submitting (Enter or the
+// emerald button) calls onSubmit; the parent decides search vs. resolve-URL.
 
-import { useState } from 'react';
 import { Search, X } from './icons.jsx';
 
 /**
- * @param {{ onSearch: (query: string) => void, loading?: boolean }} props
+ * @param {{
+ *   value: string,
+ *   onChange: (next: string) => void,
+ *   onSubmit: () => void,
+ *   loading?: boolean,
+ * }} props
  */
-export default function SearchBar({ onSearch, loading = false }) {
-  const [value, setValue] = useState('');
-
+export default function SearchBar({ value, onChange, onSubmit, loading = false }) {
   function submit(e) {
     e?.preventDefault();
-    onSearch(value.trim());
-  }
-
-  function clear() {
-    setValue('');
-    onSearch('');
+    onSubmit();
   }
 
   return (
@@ -38,15 +36,15 @@ export default function SearchBar({ onSearch, loading = false }) {
           autoComplete="off"
           spellCheck="false"
           value={value}
-          onChange={(e) => setValue(e.target.value)}
-          placeholder="Search for a song"
-          aria-label="Search for a song"
+          onChange={(e) => onChange(e.target.value)}
+          placeholder="Search, or paste a YouTube link"
+          aria-label="Search for a song or paste a YouTube link"
           className="min-w-0 flex-1 bg-transparent text-zinc-100 placeholder:text-zinc-500 outline-none"
         />
         {value && (
           <button
             type="button"
-            onClick={clear}
+            onClick={() => onChange('')}
             aria-label="Clear search"
             className="-mr-1 grid h-8 w-8 shrink-0 place-items-center rounded-full text-zinc-400 hover:text-zinc-100"
           >

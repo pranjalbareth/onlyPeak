@@ -12,7 +12,8 @@ import { useState, useRef, useEffect } from 'react';
 import { useLibraryStore } from '../store/libraryStore.js';
 import { usePlayerStore } from '../store/playerStore.js';
 import { formatRange } from '../lib/peakMath.js';
-import { ListMusic, Music, Plus, X, Check, Play, CloudOff } from './icons.jsx';
+import { parseVideoId } from '../lib/ytUrl.js';
+import { ListMusic, Music, Plus, X, Check, Play, CloudOff, Settings, Clock } from './icons.jsx';
 import SearchBar from './SearchBar.jsx';
 import SearchResults from './SearchResults.jsx';
 
@@ -20,38 +21,67 @@ import SearchResults from './SearchResults.jsx';
  * Library home screen.
  * @param {{ onPickSong: (song: object) => void, onOpenPlaylist: (playlistId: string) => void }} props
  */
-export default function LibraryScreen({ onPickSong, onOpenPlaylist }) {
+export default function LibraryScreen({ onPickSong, onOpenPlaylist, onOpenSettings }) {
   // Subscribe to the slices this screen renders so it reacts to library changes.
   const playlists = useLibraryStore((s) => s.playlists);
   const peaksById = useLibraryStore((s) => s.peaksById);
   const songsById = useLibraryStore((s) => s.songsById);
   const settings = useLibraryStore((s) => s.settings);
   const recentPeakIds = useLibraryStore((s) => s.recentPeakIds);
+  const searchHistory = useLibraryStore((s) => s.searchHistory);
   const searchResults = useLibraryStore((s) => s.searchResults);
   const searching = useLibraryStore((s) => s.searching);
   const searchError = useLibraryStore((s) => s.searchError);
 
+  // LibraryScreen owns the query text so chips / paste-URL can drive the input.
+  const [query, setQuery] = useState('');
+
   const showingSearch = searching || searchResults.length > 0 || Boolean(searchError);
+
+  // A submit is either a pasted YouTube link (skip straight to resolve/editor)
+  // or a normal text search.
+  function runQuery(q) {
+    const trimmed = (q || '').trim();
+    const videoId = parseVideoId(trimmed);
+    if (videoId) {
+      onPickSong({ videoId });
+      return;
+    }
+    useLibraryStore.getState().search(trimmed);
+  }
+
+  function handleChange(next) {
+    setQuery(next);
+    // Emptying the field returns to the library (clears any results).
+    if (next.trim() === '') useLibraryStore.getState().search('');
+  }
+
+  function pickRecent(q) {
+    setQuery(q);
+    runQuery(q);
+  }
 
   return (
     <div className="mx-auto w-full max-w-md">
       {/* 1) Sticky search header. */}
       <header className="sticky top-0 z-30 bg-zinc-950/95 backdrop-blur supports-[backdrop-filter]:bg-zinc-950/80 px-4 pt-4 pb-3 border-b border-zinc-800">
-        <div className="flex items-center gap-2">
-          <div className="flex-1">
-            <SearchBar onSearch={(q) => useLibraryStore.getState().search(q)} />
-          </div>
-          {showingSearch && (
-            <button
-              type="button"
-              onClick={() => useLibraryStore.getState().clearSearch()}
-              aria-label="Clear search"
-              className="flex h-11 w-11 shrink-0 items-center justify-center rounded-full text-zinc-400 hover:text-zinc-100 hover:bg-zinc-800 transition-colors"
-            >
-              <X className="h-5 w-5" />
-            </button>
-          )}
+        <div className="flex items-center justify-between">
+          <span className="text-base font-bold tracking-tight text-emerald-400">OnlyPeak</span>
+          <button
+            type="button"
+            onClick={onOpenSettings}
+            aria-label="Settings"
+            className="flex h-9 w-9 items-center justify-center rounded-full text-zinc-400 hover:bg-zinc-800 hover:text-zinc-100"
+          >
+            <Settings className="h-5 w-5" />
+          </button>
         </div>
+        <SearchBar
+          value={query}
+          onChange={handleChange}
+          onSubmit={() => runQuery(query)}
+          loading={searching}
+        />
       </header>
 
       <main className="px-4 pt-4 pb-28">
@@ -69,7 +99,9 @@ export default function LibraryScreen({ onPickSong, onOpenPlaylist }) {
             songsById={songsById}
             settings={settings}
             recentPeakIds={recentPeakIds}
+            searchHistory={searchHistory}
             onOpenPlaylist={onOpenPlaylist}
+            onPickRecent={pickRecent}
           />
         )}
       </main>
@@ -80,7 +112,16 @@ export default function LibraryScreen({ onPickSong, onOpenPlaylist }) {
 /**
  * The library content (everything below the search header when not searching).
  */
-function LibraryBody({ playlists, peaksById, songsById, settings, recentPeakIds, onOpenPlaylist }) {
+function LibraryBody({
+  playlists,
+  peaksById,
+  songsById,
+  settings,
+  recentPeakIds,
+  searchHistory,
+  onOpenPlaylist,
+  onPickRecent,
+}) {
   const lastPlaylistId = settings?.lastPlaylistId || null;
   const lastPlaylist = lastPlaylistId
     ? playlists.find((p) => p.id === lastPlaylistId)
@@ -96,6 +137,51 @@ function LibraryBody({ playlists, peaksById, songsById, settings, recentPeakIds,
 
   return (
     <div className="space-y-7">
+      {searchHistory.length > 0 && (
+        <section aria-labelledby="recent-searches">
+          <div className="mb-3 flex items-center justify-between">
+            <h2
+              id="recent-searches"
+              className="text-sm font-semibold uppercase tracking-wide text-zinc-400"
+            >
+              Recent searches
+            </h2>
+            <button
+              type="button"
+              onClick={() => useLibraryStore.getState().clearSearchHistory()}
+              className="text-xs font-medium text-zinc-500 hover:text-zinc-300"
+            >
+              Clear
+            </button>
+          </div>
+          <div className="flex flex-wrap gap-2">
+            {searchHistory.slice(0, 8).map((q) => (
+              <span
+                key={q}
+                className="group flex items-center overflow-hidden rounded-full border border-zinc-800 bg-zinc-900 text-sm text-zinc-200"
+              >
+                <button
+                  type="button"
+                  onClick={() => onPickRecent(q)}
+                  className="flex min-h-9 items-center gap-1.5 py-1.5 pl-3 pr-2 hover:text-emerald-300"
+                >
+                  <Clock className="h-3.5 w-3.5 text-zinc-500" />
+                  <span className="max-w-[10rem] truncate">{q}</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => useLibraryStore.getState().removeSearch(q)}
+                  aria-label={`Remove ${q} from recent searches`}
+                  className="flex h-9 w-7 items-center justify-center text-zinc-600 hover:text-zinc-300"
+                >
+                  <X className="h-3.5 w-3.5" />
+                </button>
+              </span>
+            ))}
+          </div>
+        </section>
+      )}
+
       {hasJumpBackIn && (
         <section aria-labelledby="jump-back-in">
           <h2

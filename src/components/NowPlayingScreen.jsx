@@ -6,6 +6,7 @@
 import { usePlayerStore } from '../store/playerStore.js';
 import { useLibraryStore } from '../store/libraryStore.js';
 import { formatRange, formatTime } from '../lib/peakMath.js';
+import { useAccentColor } from '../lib/accentColor.js';
 import {
   ChevronDown,
   Play,
@@ -30,6 +31,9 @@ export default function NowPlayingScreen() {
 
   const peaksById = useLibraryStore((s) => s.peaksById);
 
+  // Dynamic accent derived from the current artwork (falls back to emerald).
+  const accent = useAccentColor(currentSong?.thumbnailUrl);
+
   if (!expanded) return null;
 
   const player = usePlayerStore.getState;
@@ -45,7 +49,10 @@ export default function NowPlayingScreen() {
   const loopOneActive = mode === 'loop-one';
 
   return (
-    <div className="fixed inset-0 z-50 overflow-y-auto bg-zinc-950 text-zinc-100">
+    <div
+      className="fixed inset-0 z-50 overflow-y-auto bg-zinc-950 text-zinc-100"
+      style={{ '--accent': accent }}
+    >
       <div className="mx-auto flex min-h-dvh w-full max-w-md flex-col px-5 pb-8 pt-[max(env(safe-area-inset-top),1rem)]">
         {/* Header: collapse */}
         <div className="flex items-center justify-between">
@@ -65,7 +72,10 @@ export default function NowPlayingScreen() {
 
         {/* Artwork */}
         <div className="mt-4 flex justify-center">
-          <div className="aspect-square w-full max-w-xs overflow-hidden rounded-2xl border border-zinc-800 bg-zinc-900">
+          <div
+            className="aspect-square w-full max-w-xs overflow-hidden rounded-2xl border border-zinc-800 bg-zinc-900"
+            style={{ boxShadow: '0 24px 70px -24px color-mix(in srgb, var(--accent) 55%, transparent)' }}
+          >
             {currentSong?.thumbnailUrl ? (
               <img
                 src={currentSong.thumbnailUrl}
@@ -100,8 +110,8 @@ export default function NowPlayingScreen() {
         <div className="mt-4">
           <div className="h-1 w-full overflow-hidden rounded-full bg-zinc-800">
             <div
-              className="h-full rounded-full bg-emerald-400 transition-[width] duration-150 ease-linear"
-              style={{ width: `${progress * 100}%` }}
+              className="h-full rounded-full transition-[width] duration-150 ease-linear"
+              style={{ width: `${progress * 100}%`, backgroundColor: 'var(--accent)' }}
             />
           </div>
           <div className="mt-1 flex justify-between text-[11px] tabular-nums text-zinc-500">
@@ -125,7 +135,11 @@ export default function NowPlayingScreen() {
             type="button"
             onClick={() => player().toggle()}
             aria-label={isPlaying ? 'Pause' : 'Play'}
-            className="flex h-16 w-16 items-center justify-center rounded-full bg-emerald-400 text-black shadow-lg shadow-emerald-500/20 hover:bg-emerald-300 active:scale-95"
+            className="flex h-16 w-16 items-center justify-center rounded-full text-black shadow-lg active:scale-95"
+            style={{
+              backgroundColor: 'var(--accent)',
+              boxShadow: '0 10px 30px -8px color-mix(in srgb, var(--accent) 45%, transparent)',
+            }}
           >
             {isPlaying ? (
               <Pause size={30} aria-hidden="true" />

@@ -31,6 +31,8 @@ const DEFAULT_SETTINGS = {
   crossfadeMs: 0,
   lastPlaylistId: null,
   recentPeakIds: [],
+  searchHistory: [],   // recent search queries (most-recent first)
+  seeded: false,       // true once the first-run demo seed has run
 };
 
 let _dbPromise = null;
@@ -196,6 +198,23 @@ export async function hasAudioBlob(peakId) {
   const db = await getDB();
   const key = await db.getKey('audioBlobs', peakId);
   return key !== undefined;
+}
+
+/**
+ * Summarize offline cache usage for the Storage panel: how many clips are stored
+ * and their total size in bytes (summed from the Blob records themselves, so it
+ * reflects what OnlyPeak actually holds — independent of the browser's quota
+ * estimate which lumps in all origin storage).
+ * @returns {Promise<{count:number, bytes:number}>}
+ */
+export async function getCacheStats() {
+  const db = await getDB();
+  const blobs = await db.getAll('audioBlobs');
+  let bytes = 0;
+  for (const b of blobs) {
+    if (b && typeof b.size === 'number') bytes += b.size;
+  }
+  return { count: blobs.length, bytes };
 }
 
 /* ----------------------------------------------------------------------------

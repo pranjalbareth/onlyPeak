@@ -1,28 +1,42 @@
 """
 OnlyPeak personal backend — FastAPI app.
+
 Single-user, no auth (build-spec Section 0/6). All yt-dlp logic lives in
 youtube.py so YouTube breakage stays localized. This module is the HTTP layer:
 search, resolve, a Range-aware audio proxy, and an ffmpeg-based clip endpoint.
+
 Run:
     uvicorn main:app --reload --host 0.0.0.0 --port 8000
 """
+
 import os
 import shutil
 import asyncio
 import tempfile
+import subprocess
+
 import httpx
 from fastapi import FastAPI, Query, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, StreamingResponse, FileResponse
 from starlette.background import BackgroundTask
+
 import youtube
+
+
 app = FastAPI(title="OnlyPeak Backend", version="1.0.0")
+
+
 # ---------------------------------------------------------------------------
 # CORS
-# Local dev: localhost / 127.0.0.1 / private LAN ranges on any port.
-# Production: the deployed frontend on Vercel, including preview deploys
-#   (only-peak.vercel.app and only-peak-*.vercel.app).
-# allow_origin_regex matches "any port" for LAN and any preview hash for Vercel.
+# Personal app served from localhost during dev and from a LAN IP on the phone.
+# Allow:
+#   - localhost / 127.0.0.1 on any port
+#   - private LAN ranges on any port:
+#       10.x.x.x
+#       192.168.x.x
+#       172.16.x.x - 172.31.x.x
+# on http or https. allow_origin_regex lets us match "any port" cleanly.
 # ---------------------------------------------------------------------------
 _CORS_REGEX = (
     r"^https?://("
@@ -31,26 +45,33 @@ _CORS_REGEX = (
     r"|10\.\d{1,3}\.\d{1,3}\.\d{1,3}"
     r"|192\.168\.\d{1,3}\.\d{1,3}"
     r"|172\.(1[6-9]|2\d|3[01])\.\d{1,3}\.\d{1,3}"
-    r"|only-peak[a-z0-9-]*\.vercel\.app"
     r")(:\d+)?$"
 )
+
+_EXTRA_ORIGINS = [o for o in os.getenv("ALLOWED_ORIGINS", "").split(",") if o]
+
 app.add_middleware(
     CORSMiddleware,
     allow_origin_regex=_CORS_REGEX,
+    allow_origins=_EXTRA_ORIGINS,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
-    # Expose the headers an <audio> element needs to know about for seeking.
     expose_headers=["Content-Range", "Accept-Ranges", "Content-Length", "Content-Type"],
 )
+
+
 # How big a chunk to relay while streaming the audio proxy body.
 _STREAM_CHUNK = 64 * 1024  # 64 KiB
+
+
 # ---------------------------------------------------------------------------
 # Health
 # ---------------------------------------------------------------------------
 @app.get("/api/health")
 async def health():
     return {"ok": True}
+
 
 # ---------------------------------------------------------------------------
 # Search
@@ -212,23 +233,26 @@ async def clip(
     ]
 
     try:
-        proc = await asyncio.create_subprocess_exec(
-            *cmd,
-            stdout=asyncio.subprocess.DEVNULL,
-            stderr=asyncio.subprocess.PIPE,
-        )
-        _, stderr = await proc.communicate()
+        # Run ffmpeg in a worker thread with the plain blocking subprocess API.
+        # NOT asyncio.create_subprocess_exec: on Windows that raises
+        # NotImplementedError unless the event loop is a ProactorEventLoop, and
+        # uvicorn doesn't guarantee one — which surfaced as a generic 502
+        # "clip failed" with an empty message. subprocess.run works on any loop.
+        proc = await asyncio.to_thread(_run_ffmpeg, cmd)
 
         if proc.returncode != 0 or not os.path.exists(tmp_path) or os.path.getsize(tmp_path) == 0:
             _safe_unlink(tmp_path)
-            detail = (stderr or b"").decode("utf-8", "replace")[-500:]
+            detail = (proc.stderr or b"").decode("utf-8", "replace")[-500:]
             return JSONResponse(
                 status_code=502,
                 content={"error": f"ffmpeg failed: {detail.strip() or 'unknown error'}"},
             )
     except Exception as exc:  # noqa: BLE001
         _safe_unlink(tmp_path)
-        return JSONResponse(status_code=502, content={"error": f"clip failed: {exc}"})
+        return JSONResponse(
+            status_code=502,
+            content={"error": f"clip failed: {type(exc).__name__}: {exc}"},
+        )
 
     # FileResponse streams the file; clean it up once the response is finished.
     # BackgroundTask runs after the FileResponse body has been sent, so the
@@ -238,6 +262,20 @@ async def clip(
         media_type="audio/mp4",
         filename=f"{video_id}_{int(start)}-{int(end)}.m4a",
         background=BackgroundTask(_safe_unlink, tmp_path),
+    )
+
+
+def _run_ffmpeg(cmd: list[str]) -> subprocess.CompletedProcess:
+    """
+    Run ffmpeg synchronously (called from a thread via asyncio.to_thread). Uses
+    the blocking subprocess API so it works under any asyncio event loop. On
+    Windows, CREATE_NO_WINDOW stops a console window flashing for each clip.
+    """
+    return subprocess.run(
+        cmd,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.PIPE,
+        creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0) if os.name == "nt" else 0,
     )
 
 

@@ -36,7 +36,7 @@ import {
 import HeatmapScrubber from './HeatmapScrubber.jsx';
 
 const MIN_LEN = 3;
-const MAX_LEN = 60;
+const MAX_LEN = 90;
 const NUDGE = 1; // seconds per −/+ nudge
 
 export default function PeakEditor({ video, peak, onClose, onSaved }) {

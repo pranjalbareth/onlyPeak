@@ -24,12 +24,13 @@ import PlaylistScreen from './components/PlaylistScreen.jsx';
 import PeakEditor from './components/PeakEditor.jsx';
 import MiniPlayer from './components/MiniPlayer.jsx';
 import NowPlayingScreen from './components/NowPlayingScreen.jsx';
+import SettingsScreen from './components/SettingsScreen.jsx';
 import PlayerEngine from './components/PlayerEngine.jsx';
 import { X } from './components/icons.jsx';
 
 export default function App() {
   // Which primary screen is showing + the params each screen needs.
-  const [screen, setScreen] = useState('library'); // 'library' | 'editor' | 'playlist'
+  const [screen, setScreen] = useState('library'); // 'library' | 'editor' | 'playlist' | 'settings'
   const [selectedVideo, setSelectedVideo] = useState(null); // resolved video for create mode
   const [editingPeak, setEditingPeak] = useState(null); // Peak for edit mode (null = create)
   const [currentPlaylistId, setCurrentPlaylistId] = useState(null);
@@ -47,6 +48,10 @@ export default function App() {
     let cancelled = false;
     (async () => {
       await useLibraryStore.getState().init();
+      if (cancelled) return;
+      // First-run: seed a small demo playlist so the home isn't empty (no-op on
+      // an existing library, and only ever runs once).
+      await useLibraryStore.getState().seedDemoIfEmpty();
       if (cancelled) return;
       const lib = useLibraryStore.getState();
       const lastId = lib.settings?.lastPlaylistId || null;
@@ -116,11 +121,19 @@ export default function App() {
     setScreen('library');
   }, []);
 
+  const openSettings = useCallback(() => setScreen('settings'), []);
+
   return (
     <div className="min-h-dvh bg-zinc-950 text-zinc-100">
       {screen === 'library' && (
-        <LibraryScreen onPickSong={handlePickSong} onOpenPlaylist={handleOpenPlaylist} />
+        <LibraryScreen
+          onPickSong={handlePickSong}
+          onOpenPlaylist={handleOpenPlaylist}
+          onOpenSettings={openSettings}
+        />
       )}
+
+      {screen === 'settings' && <SettingsScreen onBack={backToLibrary} />}
 
       {screen === 'playlist' && (
         <PlaylistScreen
@@ -173,8 +186,10 @@ export default function App() {
         </div>
       )}
 
-      {/* Persistent dock + Now Playing overlay + headless engine (global). */}
-      <MiniPlayer />
+      {/* Persistent dock + Now Playing overlay + headless engine (global).
+          The editor has its own preview player and pauses global playback, so the
+          mini-player is hidden there — otherwise it overlaps the Save bar. */}
+      {screen !== 'editor' && <MiniPlayer />}
       {expanded && <NowPlayingScreen />}
       <PlayerEngine />
     </div>

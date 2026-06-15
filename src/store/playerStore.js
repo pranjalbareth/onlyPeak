@@ -303,4 +303,19 @@ export const usePlayerStore = create((set, get) => ({
   setExpanded(b) {
     set({ expanded: b });
   },
+
+  /**
+   * Re-derive the current peak's sourceType from whether its clip blob still
+   * exists (used after the offline cache is cleared while something cached is
+   * playing). If it changed, bump seekToken so the engine reloads the source.
+   */
+  async reconcileSourceTypes() {
+    const { currentPeak, sourceType } = get();
+    if (!currentPeak) return;
+    const cached = await hasAudioBlob(currentPeak.id);
+    const nextType = cached ? 'cached' : 'online';
+    if (nextType !== sourceType) {
+      set((s) => ({ sourceType: nextType, positionSec: 0, seekToken: s.seekToken + 1 }));
+    }
+  },
 }));

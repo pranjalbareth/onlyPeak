@@ -27,4 +27,10 @@ export {
   CloudOff,
   Flame,
   ArrowLeft,
+  Settings,
+  HardDrive,
+  Clock,
+  Link2,
+  Sparkles,
+  Waves,
 } from 'lucide-react';

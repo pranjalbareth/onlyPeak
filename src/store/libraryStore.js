@@ -37,6 +37,7 @@ export const useLibraryStore = create((set, get) => ({
   searchResults: [],      // Song[]
   searching: false,
   searchError: null,
+  searchHistory: [],      // recent queries (most-recent first), mirrored from settings
 
   /**
    * Hydrate the store from IndexedDB and apply forward migrations. Call once at
@@ -60,6 +61,7 @@ export const useLibraryStore = create((set, get) => ({
       songsById,
       settings,
       recentPeakIds: settings.recentPeakIds || [],
+      searchHistory: settings.searchHistory || [],
     });
   },
 
@@ -79,6 +81,7 @@ export const useLibraryStore = create((set, get) => ({
       const results = await api.searchSongs(query);
       if (seq !== searchSeq) return; // a newer search/clear superseded this one
       set({ searchResults: results, searching: false });
+      get().recordSearch(query);
     } catch (err) {
       if (seq !== searchSeq) return;
       set({ searchResults: [], searching: false, searchError: err.message || String(err) });
@@ -89,6 +92,28 @@ export const useLibraryStore = create((set, get) => ({
   clearSearch() {
     searchSeq += 1;
     set({ searchResults: [], searching: false, searchError: null });
+  },
+
+  /** Prepend a query to the recent-search history (dedup, cap 10) and persist. */
+  recordSearch(query) {
+    const q = (query || '').trim();
+    if (!q) return;
+    const next = [q, ...get().searchHistory.filter((x) => x.toLowerCase() !== q.toLowerCase())].slice(0, 10);
+    set({ searchHistory: next });
+    db.putSettings({ searchHistory: next });
+  },
+
+  /** Remove a single query from the recent-search history (persisted). */
+  removeSearch(query) {
+    const next = get().searchHistory.filter((x) => x !== query);
+    set({ searchHistory: next });
+    db.putSettings({ searchHistory: next });
+  },
+
+  /** Clear the entire recent-search history (persisted). */
+  clearSearchHistory() {
+    set({ searchHistory: [] });
+    db.putSettings({ searchHistory: [] });
   },
 
   /** Number of peaks the library has for a given videoId (for the "N peaks" badge). */
@@ -352,5 +377,91 @@ export const useLibraryStore = create((set, get) => ({
       peaksById[peak.id] = updated;
     }
     set({ peaksById });
+  },
+
+  /** Persist the default peak length (seconds) used for new suggestions. */
+  async setDefaultPeakLength(sec) {
+    const n = Math.max(3, Math.min(90, Math.round(Number(sec) || 0)));
+    const next = await db.putSettings({ defaultPeakLengthSec: n });
+    set({ settings: next });
+  },
+
+  /** Persist the crossfade duration (milliseconds) between peaks. */
+  async setCrossfadeMs(ms) {
+    const n = Math.max(0, Math.min(12000, Math.round(Number(ms) || 0)));
+    const next = await db.putSettings({ crossfadeMs: n });
+    set({ settings: next });
+  },
+
+  /**
+   * First-run demo seed (build-spec Section 11, Phase 6). Runs at most once,
+   * gated by settings.seeded, and ONLY when the library is empty (so it never
+   * clobbers a real library or comes back after the user deletes the demo).
+   * Seeds a small playlist of peaks on famously-stable videos; they stream
+   * online (not cached) and need the backend, but give the app content on a
+   * fresh install instead of an empty home.
+   * @returns {Promise<boolean>} whether a seed was written
+   */
+  async seedDemoIfEmpty() {
+    const { settings, playlists } = get();
+    if (settings?.seeded) return false;
+    if (playlists.length > 0) {
+      // Real data already exists — mark seeded so we never touch it later.
+      const next = await db.putSettings({ seeded: true });
+      set({ settings: next });
+      return false;
+    }
+
+    const songs = [
+      { videoId: 'dQw4w9WgXcQ', title: 'Never Gonna Give You Up', artist: 'Rick Astley', durationSec: 213, startSec: 43, endSec: 65 },
+      { videoId: 'djV11Xbc914', title: 'Take On Me', artist: 'a-ha', durationSec: 225, startSec: 49, endSec: 71 },
+      { videoId: 'y6120QOlsfU', title: 'Sandstorm', artist: 'Darude', durationSec: 227, startSec: 60, endSec: 82 },
+    ];
+
+    const peakIds = [];
+    const peaksById = { ...get().peaksById };
+    const songsById = { ...get().songsById };
+
+    for (const s of songs) {
+      const song = {
+        videoId: s.videoId,
+        title: s.title,
+        artist: s.artist,
+        durationSec: s.durationSec,
+        thumbnailUrl: `https://i.ytimg.com/vi/${s.videoId}/hqdefault.jpg`,
+      };
+      await db.putSong(song);
+      songsById[song.videoId] = song;
+
+      const peak = {
+        id: uuidv4(),
+        videoId: s.videoId,
+        title: s.title,
+        startSec: s.startSec,
+        endSec: s.endSec,
+        createdAt: Date.now(),
+        cached: false,
+      };
+      await db.putPeak(peak);
+      peaksById[peak.id] = peak;
+      peakIds.push(peak.id);
+    }
+
+    const playlist = {
+      id: uuidv4(),
+      name: 'Demo · Peaks',
+      peakIds,
+      createdAt: Date.now(),
+    };
+    await db.putPlaylist(playlist);
+
+    const next = await db.putSettings({ seeded: true, lastPlaylistId: playlist.id });
+    set((st) => ({
+      playlists: [...st.playlists, playlist],
+      peaksById,
+      songsById,
+      settings: next,
+    }));
+    return true;
   },
 }));
