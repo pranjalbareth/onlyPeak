@@ -22,7 +22,7 @@ export default defineConfig({
         name: 'OnlyPeak',
         short_name: 'OnlyPeak',
         description: 'Play only the best part of every song.',
-        theme_color: '#10b981',
+        theme_color: '#09090b',
         background_color: '#09090b',
         display: 'standalone',
         orientation: 'portrait',
