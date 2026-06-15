@@ -43,6 +43,39 @@ OnlyPeak is a web-first, mobile-friendly music player focused on *the best parts
 
 ---
 
+## 🚀 Getting Started
+
+```bash
+npm install
+npm run dev          # http://localhost:5180 (or the port Vite prints)
+```
+
+Search uses the YouTube Data API, so create a `.env` (copy from `.env.example`):
+
+```bash
+VITE_YOUTUBE_API_KEY=your_youtube_data_api_v3_key
+```
+
+### Environment variables
+
+| Variable | Required | Purpose |
+| --- | --- | --- |
+| `VITE_YOUTUBE_API_KEY` | for search | YouTube Data API v3 key used by in-app search. Playback uses the public IFrame player and needs no key. |
+
+> **Secure-origin note:** the YouTube IFrame player only plays on a secure context — `https://` or `localhost`. Opening the dev server on a phone via a raw `http://<LAN-IP>` address shows "Video Unavailable". To test on a phone locally, run `HTTPS=true npm run dev -- --host` (self-signed cert) **with a hostname**, or just use the HTTPS production URL.
+
+## 📦 Deployment (Vercel)
+
+OnlyPeak is a static Vite SPA with no backend — deploy as-is:
+
+- **Build command:** `npm run build`
+- **Output directory:** `dist`
+- **Env var:** set `VITE_YOUTUBE_API_KEY` in the Vercel project settings.
+
+Playlists and peaks are stored locally in the browser (IndexedDB). Production is served over HTTPS, so mobile playback works there.
+
+---
+
 ## 📂 Folder Structure (WIP)
 
 ```

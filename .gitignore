@@ -17,13 +17,6 @@ dist-ssr
 .env.*
 !.env.example
 
-# Python backend
-backend/.venv/
-backend/__pycache__/
-backend/**/__pycache__/
-*.pyc
-.cache/
-
 # Editor directories and files
 .vscode/*
 !.vscode/extensions.json

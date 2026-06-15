@@ -5,7 +5,6 @@
 //   songs       keyPath 'videoId'
 //   peaks       keyPath 'id', index 'by-videoId' on videoId
 //   playlists   keyPath 'id'
-//   audioBlobs  out-of-line key = peakId, value = Blob (the trimmed clip)
 //   settings    out-of-line key = 'app', single record
 //
 // The upgrade() callback is written idempotently so a version bump that adds a
@@ -55,10 +54,6 @@ export function getDB() {
         }
         if (!db.objectStoreNames.contains('playlists')) {
           db.createObjectStore('playlists', { keyPath: 'id' });
-        }
-        if (!db.objectStoreNames.contains('audioBlobs')) {
-          // out-of-line keys: key = peakId, value = Blob
-          db.createObjectStore('audioBlobs');
         }
         if (!db.objectStoreNames.contains('settings')) {
           // out-of-line key = SETTINGS_KEY ('app')
@@ -121,17 +116,15 @@ export async function getPeaksByVideoId(videoId) {
 }
 
 /**
- * Delete a peak and everything that references it: its cached audio blob, and
- * its id from every playlist.peakIds. Done in one read/write transaction so the
- * DB never has a dangling peakId.
+ * Delete a peak and remove its id from every playlist.peakIds. Done in one
+ * read/write transaction so the DB never has a dangling peakId.
  * @param {string} id
  * @returns {Promise<void>}
  */
 export async function deletePeak(id) {
   const db = await getDB();
-  const tx = db.transaction(['peaks', 'audioBlobs', 'playlists'], 'readwrite');
+  const tx = db.transaction(['peaks', 'playlists'], 'readwrite');
   await tx.objectStore('peaks').delete(id);
-  await tx.objectStore('audioBlobs').delete(id);
   const playlistStore = tx.objectStore('playlists');
   const playlists = await playlistStore.getAll();
   for (const pl of playlists) {
@@ -169,52 +162,6 @@ export async function getAllPlaylists() {
 export async function deletePlaylist(id) {
   const db = await getDB();
   return db.delete('playlists', id);
-}
-
-/* ----------------------------------------------------------------------------
- * Audio blobs (out-of-line key = peakId -> Blob)
- * ------------------------------------------------------------------------- */
-
-/** @param {string} peakId @param {Blob} blob @returns {Promise<IDBValidKey>} */
-export async function putAudioBlob(peakId, blob) {
-  const db = await getDB();
-  return db.put('audioBlobs', blob, peakId);
-}
-
-/** @param {string} peakId @returns {Promise<Blob|undefined>} */
-export async function getAudioBlob(peakId) {
-  const db = await getDB();
-  return db.get('audioBlobs', peakId);
-}
-
-/** @param {string} peakId @returns {Promise<void>} */
-export async function deleteAudioBlob(peakId) {
-  const db = await getDB();
-  return db.delete('audioBlobs', peakId);
-}
-
-/** @param {string} peakId @returns {Promise<boolean>} true if a clip blob is stored */
-export async function hasAudioBlob(peakId) {
-  const db = await getDB();
-  const key = await db.getKey('audioBlobs', peakId);
-  return key !== undefined;
-}
-
-/**
- * Summarize offline cache usage for the Storage panel: how many clips are stored
- * and their total size in bytes (summed from the Blob records themselves, so it
- * reflects what OnlyPeak actually holds — independent of the browser's quota
- * estimate which lumps in all origin storage).
- * @returns {Promise<{count:number, bytes:number}>}
- */
-export async function getCacheStats() {
-  const db = await getDB();
-  const blobs = await db.getAll('audioBlobs');
-  let bytes = 0;
-  for (const b of blobs) {
-    if (b && typeof b.size === 'number') bytes += b.size;
-  }
-  return { count: blobs.length, bytes };
 }
 
 /* ----------------------------------------------------------------------------

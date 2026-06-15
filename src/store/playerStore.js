@@ -2,9 +2,9 @@
 // THE SINGLE SOURCE OF TRUTH for playback (Section 9).
 //
 // This store holds *intent* (queue, index, isPlaying, mode, flags) plus the
-// *derived current* (currentPeak, currentSong, sourceType). It does NOT own the
-// real <audio> element. A separate PlayerEngine component (built later) owns the
-// <audio>, subscribes to this store, and:
+// *derived current* (currentPeak, currentSong). It does NOT own the media
+// element. A separate PlayerEngine component owns the player (a YouTube IFrame
+// player, from Phase 2), subscribes to this store, and:
 //   - seeks to peak.startSec on load,
 //   - reports playback position back via setPosition(sec),
 //   - calls handleEnded() when a peak finishes,
@@ -19,7 +19,7 @@
 // There is exactly one place that moves to a neighbouring index per trigger.
 
 import { create } from 'zustand';
-import { getPeak, getSong, hasAudioBlob, putSettings } from '../db/index.js';
+import { getPeak, getSong, putSettings } from '../db/index.js';
 import { useLibraryStore } from './libraryStore.js';
 
 /**
@@ -49,7 +49,6 @@ export const usePlayerStore = create((set, get) => ({
   // ---- derived current (resolved by _loadCurrent) ----
   currentPeak: null,
   currentSong: null,
-  sourceType: 'online', // 'online' | 'cached'
 
   // ---- engine handshake ----
   // seekToken increments whenever playback should jump (new track, seek, or
@@ -142,10 +141,9 @@ export const usePlayerStore = create((set, get) => ({
   },
 
   /**
-   * Resolve currentPeak/currentSong for the active index, pick the source type
-   * (cached blob vs online stream), reset position, and push to recents. Bumps
-   * seekToken so the engine seeks the new track to its start.
-   * Internal — callers set queue/index first.
+   * Resolve currentPeak/currentSong for the active index, reset position, and
+   * push to recents. Bumps seekToken so the engine seeks the new track to its
+   * start. Internal — callers set queue/index first.
    */
   async _loadCurrent() {
     const { queue, index } = get();
@@ -156,11 +154,9 @@ export const usePlayerStore = create((set, get) => ({
     }
     const peak = await getPeak(peakId);
     const song = peak ? await getSong(peak.videoId) : null;
-    const cached = peak ? await hasAudioBlob(peakId) : false;
     set((s) => ({
       currentPeak: peak || null,
       currentSong: song || null,
-      sourceType: cached ? 'cached' : 'online',
       positionSec: 0,
       seekToken: s.seekToken + 1,
     }));
@@ -302,20 +298,5 @@ export const usePlayerStore = create((set, get) => ({
   /** Expand/collapse the mini-player into the Now Playing screen. */
   setExpanded(b) {
     set({ expanded: b });
-  },
-
-  /**
-   * Re-derive the current peak's sourceType from whether its clip blob still
-   * exists (used after the offline cache is cleared while something cached is
-   * playing). If it changed, bump seekToken so the engine reloads the source.
-   */
-  async reconcileSourceTypes() {
-    const { currentPeak, sourceType } = get();
-    if (!currentPeak) return;
-    const cached = await hasAudioBlob(currentPeak.id);
-    const nextType = cached ? 'cached' : 'online';
-    if (nextType !== sourceType) {
-      set((s) => ({ sourceType: nextType, positionSec: 0, seekToken: s.seekToken + 1 }));
-    }
   },
 }));

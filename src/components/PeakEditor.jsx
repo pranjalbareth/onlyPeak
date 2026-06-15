@@ -1,11 +1,15 @@
 // src/components/PeakEditor.jsx
 // The heart of OnlyPeak: create AND edit a peak in one component (Section 8).
 //
-// On mount it pauses the global player and immediately starts looping the
-// suggested peak using its OWN private <audio> element (src = api.audioUrl),
-// independent of the global PlayerEngine. The user tunes the [startSec, endSec]
-// window by ear via the HeatmapScrubber + nudge/snap/set controls, then saves a
-// new (or, in edit mode, updated) Peak into a chosen playlist.
+// On mount it pauses the global player. The user tunes the [startSec, endSec]
+// window via the HeatmapScrubber + nudge/snap/set controls, then saves a new
+// (or, in edit mode, updated) Peak into a chosen playlist.
+//
+// PHASE 1: the audio-extraction backend is gone, so the private <audio> preview
+// is inert (no source). PHASE 3 reimplements the looping preview on top of the
+// YouTube IFrame player — a hidden YT.Player loaded with the video, looped
+// within [startSec, endSec], whose getDuration() also supplies durationSec when
+// the video came from a search result (durationSec === 0).
 //
 // Props:
 //   video  { videoId, title, artist, durationSec, thumbnailUrl, heatmap }
@@ -16,7 +20,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useLibraryStore } from '../store/libraryStore.js';
 import { usePlayerStore } from '../store/playerStore.js';
-import * as api from '../lib/api.js';
 import {
   suggestPeak,
   clampPeak,
@@ -126,8 +129,8 @@ export default function PeakEditor({ video, peak, onClose, onSaved }) {
     el.addEventListener('play', onPlay);
     el.addEventListener('pause', onPause);
 
-    el.src = api.audioUrl(video.videoId);
-    el.load();
+    // PHASE 1: no audio source (backend removed). The preview is silent until
+    // PHASE 3 swaps this element for a YouTube IFrame preview player.
 
     return () => {
       el.removeEventListener('timeupdate', onTimeUpdate);

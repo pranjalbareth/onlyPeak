@@ -6,9 +6,9 @@
 // every screen so playback and the dock survive navigation.
 //
 // Flows:
-//   LibraryScreen.onPickSong(song)  -> resolve the song, open PeakEditor (create)
+//   LibraryScreen.onPickSong(song)  -> open PeakEditor (create) for that video
 //   LibraryScreen.onOpenPlaylist(id)-> PlaylistScreen
-//   PlaylistScreen.onEditPeak(peak) -> resolve the song, open PeakEditor (edit)
+//   PlaylistScreen.onEditPeak(peak) -> open PeakEditor (edit) for that peak
 //   PeakEditor.onSaved / onClose    -> return to the previous screen
 //
 // On mount we hydrate the library store, then (if a last playlist exists) prime
@@ -17,7 +17,6 @@
 import { useCallback, useEffect, useState } from 'react';
 import { useLibraryStore } from './store/libraryStore.js';
 import { usePlayerStore } from './store/playerStore.js';
-import * as api from './lib/api.js';
 
 import LibraryScreen from './components/LibraryScreen.jsx';
 import PlaylistScreen from './components/PlaylistScreen.jsx';
@@ -26,7 +25,24 @@ import MiniPlayer from './components/MiniPlayer.jsx';
 import NowPlayingScreen from './components/NowPlayingScreen.jsx';
 import SettingsScreen from './components/SettingsScreen.jsx';
 import PlayerEngine from './components/PlayerEngine.jsx';
-import { X } from './components/icons.jsx';
+
+/**
+ * Build the Peak Editor's `video` shape from a song-like record (a search result
+ * or a stored Song). No network: durationSec defaults to 0 (the editor's IFrame
+ * preview fills it in via getDuration when missing) and heatmap is null, so the
+ * scrubber renders its flat neutral track.
+ */
+function toVideo(src) {
+  const videoId = src.videoId;
+  return {
+    videoId,
+    title: src.title || '',
+    artist: src.artist || '',
+    durationSec: Number(src.durationSec) || 0,
+    thumbnailUrl: src.thumbnailUrl || `https://i.ytimg.com/vi/${videoId}/hqdefault.jpg`,
+    heatmap: null,
+  };
+}
 
 export default function App() {
   // Which primary screen is showing + the params each screen needs.
@@ -34,8 +50,6 @@ export default function App() {
   const [selectedVideo, setSelectedVideo] = useState(null); // resolved video for create mode
   const [editingPeak, setEditingPeak] = useState(null); // Peak for edit mode (null = create)
   const [currentPlaylistId, setCurrentPlaylistId] = useState(null);
-  const [resolving, setResolving] = useState(false);
-  const [resolveError, setResolveError] = useState(null);
 
   // Remember where to return after the editor closes.
   const [returnScreen, setReturnScreen] = useState('library');
@@ -45,12 +59,18 @@ export default function App() {
 
   // ---- boot: hydrate the library + prime the last session into the dock ----
   useEffect(() => {
+    // Ask the browser to keep our IndexedDB (playlists + peaks) from being
+    // evicted. Best-effort: feature-detected and ignored where unavailable.
+    if (navigator.storage && typeof navigator.storage.persist === 'function') {
+      navigator.storage.persist().catch(() => {});
+    }
+
     let cancelled = false;
     (async () => {
       await useLibraryStore.getState().init();
       if (cancelled) return;
       // First-run: seed a small demo playlist so the home isn't empty (no-op on
-      // an existing library, and only ever runs once).
+      // an existing library, only ever runs once).
       await useLibraryStore.getState().seedDemoIfEmpty();
       if (cancelled) return;
       const lib = useLibraryStore.getState();
@@ -69,21 +89,12 @@ export default function App() {
 
   // ---- navigation handlers ----
 
-  // Search result picked -> resolve metadata + heatmap, then open the editor.
-  const handlePickSong = useCallback(async (song) => {
-    setResolving(true);
-    setResolveError(null);
-    try {
-      const video = await api.resolveSong(song.videoId);
-      setSelectedVideo(video);
-      setEditingPeak(null);
-      setReturnScreen('library');
-      setScreen('editor');
-    } catch (err) {
-      setResolveError(err?.message || 'Could not load that song. Try again.');
-    } finally {
-      setResolving(false);
-    }
+  // Search result picked -> open the editor in create mode for that video.
+  const handlePickSong = useCallback((song) => {
+    setSelectedVideo(toVideo(song));
+    setEditingPeak(null);
+    setReturnScreen('library');
+    setScreen('editor');
   }, []);
 
   // Open a playlist detail screen.
@@ -92,21 +103,13 @@ export default function App() {
     setScreen('playlist');
   }, []);
 
-  // Edit an existing peak -> resolve its song, then open the editor in edit mode.
-  const handleEditPeak = useCallback(async (peak) => {
-    setResolving(true);
-    setResolveError(null);
-    try {
-      const video = await api.resolveSong(peak.videoId);
-      setSelectedVideo(video);
-      setEditingPeak(peak);
-      setReturnScreen('playlist');
-      setScreen('editor');
-    } catch (err) {
-      setResolveError(err?.message || 'Could not load that song. Try again.');
-    } finally {
-      setResolving(false);
-    }
+  // Edit an existing peak -> open the editor in edit mode using the stored Song.
+  const handleEditPeak = useCallback((peak) => {
+    const song = useLibraryStore.getState().songsById[peak.videoId];
+    setSelectedVideo(toVideo({ ...song, videoId: peak.videoId, title: song?.title ?? peak.title }));
+    setEditingPeak(peak);
+    setReturnScreen('playlist');
+    setScreen('editor');
   }, []);
 
   // Leave the editor (saved or cancelled) -> go back where we came from.
@@ -150,40 +153,6 @@ export default function App() {
           onClose={closeEditor}
           onSaved={closeEditor}
         />
-      )}
-
-      {/* Full-screen "resolving…" veil while /resolve is in flight. */}
-      {resolving && (
-        <div
-          className="fixed inset-0 z-[60] flex items-center justify-center bg-zinc-950/80 backdrop-blur"
-          role="status"
-          aria-live="polite"
-        >
-          <div className="flex flex-col items-center gap-3 text-zinc-300">
-            <span className="h-8 w-8 animate-spin rounded-full border-2 border-zinc-700 border-t-emerald-400" />
-            <span className="text-sm">Loading song…</span>
-          </div>
-        </div>
-      )}
-
-      {/* Resolve error toast (auto-dismissable). */}
-      {resolveError && (
-        <div className="fixed inset-x-0 bottom-24 z-[70] mx-auto flex w-full max-w-md justify-center px-4">
-          <div
-            role="alert"
-            className="flex w-full items-center gap-3 rounded-2xl border border-red-500/30 bg-red-500/10 px-4 py-3 text-sm text-red-200 shadow-lg shadow-black/40"
-          >
-            <span className="min-w-0 flex-1">{resolveError}</span>
-            <button
-              type="button"
-              onClick={() => setResolveError(null)}
-              aria-label="Dismiss"
-              className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full text-red-200 hover:bg-red-500/20"
-            >
-              <X size={18} />
-            </button>
-          </div>
-        </div>
       )}
 
       {/* Persistent dock + Now Playing overlay + headless engine (global).

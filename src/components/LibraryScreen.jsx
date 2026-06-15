@@ -13,7 +13,7 @@ import { useLibraryStore } from '../store/libraryStore.js';
 import { usePlayerStore } from '../store/playerStore.js';
 import { formatRange } from '../lib/peakMath.js';
 import { parseVideoId } from '../lib/ytUrl.js';
-import { ListMusic, Music, Plus, X, Check, Play, CloudOff, Settings, Clock } from './icons.jsx';
+import { ListMusic, Music, Plus, X, Check, Play, Settings, Clock } from './icons.jsx';
 import SearchBar from './SearchBar.jsx';
 import SearchResults from './SearchResults.jsx';
 
@@ -36,7 +36,8 @@ export default function LibraryScreen({ onPickSong, onOpenPlaylist, onOpenSettin
   // LibraryScreen owns the query text so chips / paste-URL can drive the input.
   const [query, setQuery] = useState('');
 
-  const showingSearch = searching || searchResults.length > 0 || Boolean(searchError);
+  const showingSearch =
+    searching || searchResults.length > 0 || Boolean(searchError);
 
   // A submit is either a pasted YouTube link (skip straight to resolve/editor)
   // or a normal text search.
@@ -76,6 +77,7 @@ export default function LibraryScreen({ onPickSong, onOpenPlaylist, onOpenSettin
             <Settings className="h-5 w-5" />
           </button>
         </div>
+        {/* The search bar is the entry point to creating peaks. */}
         <SearchBar
           value={query}
           onChange={handleChange}
@@ -122,9 +124,12 @@ function LibraryBody({
   onOpenPlaylist,
   onPickRecent,
 }) {
+  const playableCount = (pl) => pl.peakIds.length;
+  const visiblePlaylists = playlists;
+
   const lastPlaylistId = settings?.lastPlaylistId || null;
   const lastPlaylist = lastPlaylistId
-    ? playlists.find((p) => p.id === lastPlaylistId)
+    ? playlists.find((p) => p.id === lastPlaylistId) || null
     : null;
 
   // Resolve recent peaks (skip ids that no longer exist).
@@ -194,7 +199,7 @@ function LibraryBody({
           {lastPlaylist && (
             <JumpBackPlaylistCard
               playlist={lastPlaylist}
-              peakCount={lastPlaylist.peakIds.length}
+              peakCount={playableCount(lastPlaylist)}
               onOpen={() => onOpenPlaylist(lastPlaylist.id)}
             />
           )}
@@ -223,15 +228,15 @@ function LibraryBody({
           </h2>
         </div>
 
-        {playlists.length === 0 ? (
+        {visiblePlaylists.length === 0 ? (
           <EmptyPlaylists />
         ) : (
           <ul className="space-y-2">
-            {playlists.map((playlist) => (
+            {visiblePlaylists.map((playlist) => (
               <li key={playlist.id}>
                 <PlaylistCard
                   playlist={playlist}
-                  peakCount={playlist.peakIds.length}
+                  peakCount={playableCount(playlist)}
                   onOpen={() => onOpenPlaylist(playlist.id)}
                 />
               </li>
@@ -239,7 +244,7 @@ function LibraryBody({
           </ul>
         )}
 
-        <NewPlaylistAffordance autoFocus={playlists.length === 0} />
+        <NewPlaylistAffordance autoFocus={visiblePlaylists.length === 0} />
       </section>
     </div>
   );
@@ -299,7 +304,6 @@ function RecentPeakChip({ peak, song }) {
       <span className="min-w-0">
         <span className="flex items-center gap-1">
           <span className="truncate text-sm font-medium text-zinc-100">{title}</span>
-          {peak.cached && <CloudOff className="h-3 w-3 shrink-0 text-emerald-400" aria-label="Available offline" />}
         </span>
         <span className="block truncate text-xs text-zinc-500">
           {formatRange(peak.startSec, peak.endSec)}

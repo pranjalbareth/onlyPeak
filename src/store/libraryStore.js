@@ -7,14 +7,8 @@
 import { create } from 'zustand';
 import { v4 as uuidv4 } from 'uuid';
 import * as db from '../db/index.js';
-import * as api from '../lib/api.js';
 
 const RECENTS_CAP = 12;
-
-// Monotonic search generation. Each search() captures the latest value; a later
-// search() or clearSearch() bumps it, so a stale in-flight response can detect
-// that it's no longer current and skip applying its results.
-let searchSeq = 0;
 
 /**
  * Prepend an id to a recents list, de-duplicating and capping length.
@@ -66,31 +60,23 @@ export const useLibraryStore = create((set, get) => ({
   },
 
   /**
-   * Run a backend search, managing searching/searchError and storing results.
+   * Run a song search, managing searching/searchError and storing results.
+   *
+   * PHASE 1: the audio-extraction backend has been removed, so this is inert —
+   * it clears results and never hits the network. PHASE 3 replaces the body with
+   * a direct YouTube Data API call (src/lib/youtube.js) using VITE_YOUTUBE_API_KEY,
+   * keeping the same searching/searchError/searchResults contract and the
+   * recordSearch(query) history hook below.
    */
   async search(q) {
     const query = (q || '').trim();
-    if (!query) {
-      searchSeq += 1; // invalidate any in-flight search
-      set({ searchResults: [], searching: false, searchError: null });
-      return;
-    }
-    const seq = ++searchSeq;
-    set({ searching: true, searchError: null });
-    try {
-      const results = await api.searchSongs(query);
-      if (seq !== searchSeq) return; // a newer search/clear superseded this one
-      set({ searchResults: results, searching: false });
-      get().recordSearch(query);
-    } catch (err) {
-      if (seq !== searchSeq) return;
-      set({ searchResults: [], searching: false, searchError: err.message || String(err) });
-    }
+    set({ searchResults: [], searching: false, searchError: null });
+    if (!query) return;
+    // Intentionally a no-op until Phase 3 wires up the YouTube Data API.
   },
 
-  /** Clear search results and error (also invalidates any in-flight search). */
+  /** Clear search results and error. */
   clearSearch() {
-    searchSeq += 1;
     set({ searchResults: [], searching: false, searchError: null });
   },
 
@@ -169,8 +155,8 @@ export const useLibraryStore = create((set, get) => ({
   /**
    * Create OR update a peak (the Peak Editor's save). When `id` is present the
    * existing peak is updated in place; otherwise a new peak is created (uuid id,
-   * createdAt, cached:false) and appended to the target playlist. Always upserts
-   * the underlying Song, records lastPlaylistId, and pushes the peak onto recents.
+   * createdAt) and appended to the target playlist. Always upserts the underlying
+   * Song, records lastPlaylistId, and pushes the peak onto recents.
    * @param {{id?:string,videoId:string,title:string,startSec:number,endSec:number,song?:object}} input
    * @param {string} playlistId  target playlist (used on create; ignored on update)
    * @returns {Promise<object>} the saved peak
@@ -189,14 +175,6 @@ export const useLibraryStore = create((set, get) => ({
         startSec,
         endSec,
       };
-      // If the range changed on a cached peak, the stored clip blob is now stale
-      // (it was trimmed to the OLD [start,end]). Drop the blob and clear cached so
-      // playback falls back to the online stream with the new bounds; the user can
-      // re-cache. Otherwise the edited range would be silently ignored on playback.
-      if (existing?.cached && (existing.startSec !== startSec || existing.endSec !== endSec)) {
-        peak.cached = false;
-        await db.deleteAudioBlob(id);
-      }
     } else {
       peak = {
         id: uuidv4(),
@@ -205,7 +183,6 @@ export const useLibraryStore = create((set, get) => ({
         startSec,
         endSec,
         createdAt: Date.now(),
-        cached: false,
       };
     }
 
@@ -247,11 +224,11 @@ export const useLibraryStore = create((set, get) => ({
   },
 
   /**
-   * Delete a peak everywhere: DB cascade (blob + playlist refs) then mirror into
-   * state (peaksById, playlists.peakIds, recents).
+   * Delete a peak everywhere: DB cascade (playlist refs) then mirror into state
+   * (peaksById, playlists.peakIds, recents).
    */
   async deletePeak(id) {
-    await db.deletePeak(id); // also drops the audio blob and removes id from all playlists
+    await db.deletePeak(id); // also removes id from all playlists
     set((s) => {
       const peaksById = { ...s.peaksById };
       delete peaksById[id];
@@ -321,64 +298,6 @@ export const useLibraryStore = create((set, get) => ({
     return playlist.peakIds.map((id) => peaksById[id]).filter(Boolean);
   },
 
-  /**
-   * Download + store a peak's clip blob, then mark the peak cached (persisted).
-   */
-  async cachePeak(peakId) {
-    const peak = get().peaksById[peakId];
-    if (!peak) return;
-    const blob = await api.fetchClipBlob(peak.videoId, peak.startSec, peak.endSec);
-    await db.putAudioBlob(peakId, blob);
-    const updated = { ...peak, cached: true };
-    await db.putPeak(updated);
-    set((s) => ({ peaksById: { ...s.peaksById, [peakId]: updated } }));
-  },
-
-  /** Drop a peak's cached clip blob and clear its cached flag (persisted). */
-  async uncachePeak(peakId) {
-    const peak = get().peaksById[peakId];
-    await db.deleteAudioBlob(peakId);
-    if (!peak) return;
-    const updated = { ...peak, cached: false };
-    await db.putPeak(updated);
-    set((s) => ({ peaksById: { ...s.peaksById, [peakId]: updated } }));
-  },
-
-  /**
-   * Cache every peak in a playlist for offline use. Tolerates per-peak failures
-   * (e.g. deleted source video) and returns which succeeded/failed.
-   * @returns {Promise<{cached:string[],failed:Array<{peakId:string,error:string}>}>}
-   */
-  async cachePlaylist(playlistId) {
-    const peaks = get().getPeaksForPlaylist(playlistId);
-    const cached = [];
-    const failed = [];
-    for (const peak of peaks) {
-      try {
-        await get().cachePeak(peak.id);
-        cached.push(peak.id);
-      } catch (err) {
-        failed.push({ peakId: peak.id, error: err.message || String(err) });
-      }
-    }
-    return { cached, failed };
-  },
-
-  /** Drop all cached clip blobs and clear every peak's cached flag (persisted). */
-  async clearAllCache() {
-    const peaks = Object.values(get().peaksById);
-    for (const peak of peaks) {
-      await db.deleteAudioBlob(peak.id);
-    }
-    const peaksById = {};
-    for (const peak of peaks) {
-      const updated = { ...peak, cached: false };
-      await db.putPeak(updated);
-      peaksById[peak.id] = updated;
-    }
-    set({ peaksById });
-  },
-
   /** Persist the default peak length (seconds) used for new suggestions. */
   async setDefaultPeakLength(sec) {
     const n = Math.max(3, Math.min(90, Math.round(Number(sec) || 0)));
@@ -397,9 +316,9 @@ export const useLibraryStore = create((set, get) => ({
    * First-run demo seed (build-spec Section 11, Phase 6). Runs at most once,
    * gated by settings.seeded, and ONLY when the library is empty (so it never
    * clobbers a real library or comes back after the user deletes the demo).
-   * Seeds a small playlist of peaks on famously-stable videos; they stream
-   * online (not cached) and need the backend, but give the app content on a
-   * fresh install instead of an empty home.
+   * Seeds a small playlist of peaks on famously-stable videos so the app has
+   * content on a fresh install instead of an empty home; they play online via
+   * the YouTube IFrame player.
    * @returns {Promise<boolean>} whether a seed was written
    */
   async seedDemoIfEmpty() {
@@ -440,7 +359,6 @@ export const useLibraryStore = create((set, get) => ({
         startSec: s.startSec,
         endSec: s.endSec,
         createdAt: Date.now(),
-        cached: false,
       };
       await db.putPeak(peak);
       peaksById[peak.id] = peak;

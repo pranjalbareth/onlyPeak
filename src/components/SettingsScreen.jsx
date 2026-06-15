@@ -1,55 +1,17 @@
 // src/components/SettingsScreen.jsx
-// Settings + Storage (build-spec Sections 5, 10, 11). One place for the personal
-// knobs: default peak length, crossfade duration, offline-cache management, and
-// clearing search history. All values persist through the library store/IndexedDB.
+// Settings (build-spec Sections 5, 10, 11). One place for the personal knobs:
+// default peak length, crossfade duration, and clearing search history. All
+// values persist through the library store/IndexedDB.
 
-import { useEffect, useState } from 'react';
 import { useLibraryStore } from '../store/libraryStore.js';
-import { usePlayerStore } from '../store/playerStore.js';
-import { getCacheStats } from '../db/index.js';
-import { ArrowLeft, HardDrive, Waves, Flame, Clock, Trash2 } from './icons.jsx';
-
-function formatBytes(bytes) {
-  if (!bytes) return '0 MB';
-  const mb = bytes / (1024 * 1024);
-  if (mb < 1) return `${Math.max(1, Math.round(bytes / 1024))} KB`;
-  return `${mb.toFixed(mb < 10 ? 1 : 0)} MB`;
-}
+import { ArrowLeft, Waves, Flame, Clock, Trash2 } from './icons.jsx';
 
 export default function SettingsScreen({ onBack }) {
   const settings = useLibraryStore((s) => s.settings);
   const searchHistory = useLibraryStore((s) => s.searchHistory);
-  const peaksById = useLibraryStore((s) => s.peaksById);
 
   const defaultLen = settings?.defaultPeakLengthSec ?? 20;
   const crossfadeMs = settings?.crossfadeMs ?? 0;
-
-  const [stats, setStats] = useState({ count: 0, bytes: 0 });
-  const [clearing, setClearing] = useState(false);
-
-  // Re-read cache stats whenever the set of peaks changes (cache ops mutate peaks).
-  useEffect(() => {
-    let active = true;
-    getCacheStats().then((s) => {
-      if (active) setStats(s);
-    });
-    return () => {
-      active = false;
-    };
-  }, [peaksById]);
-
-  async function clearCache() {
-    if (clearing || stats.count === 0) return;
-    setClearing(true);
-    try {
-      await useLibraryStore.getState().clearAllCache();
-      // Any cached peak that's mid-playback should fall back to the online stream.
-      await usePlayerStore.getState().reconcileSourceTypes?.();
-      setStats(await getCacheStats());
-    } finally {
-      setClearing(false);
-    }
-  }
 
   const crossfadeSec = (crossfadeMs / 1000).toFixed(crossfadeMs % 1000 === 0 ? 0 : 1);
 
@@ -117,37 +79,8 @@ export default function SettingsScreen({ onBack }) {
               aria-label="Crossfade duration in milliseconds"
             />
             <p className="mt-1 text-xs text-zinc-500">
-              Blend the end of each peak into the next. Smoothest on downloaded peaks.
+              Blend the end of each peak into the next.
             </p>
-          </div>
-        </section>
-
-        {/* Storage */}
-        <section className="mt-6">
-          <h2 className="mb-3 text-xs font-semibold uppercase tracking-wide text-zinc-500">
-            Storage
-          </h2>
-          <div className="rounded-2xl border border-zinc-800 bg-zinc-900 p-4">
-            <div className="flex items-center gap-3">
-              <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-zinc-800 text-emerald-400">
-                <HardDrive size={20} />
-              </span>
-              <div className="min-w-0 flex-1">
-                <p className="text-sm font-medium">Offline downloads</p>
-                <p className="text-xs text-zinc-400">
-                  {stats.count} {stats.count === 1 ? 'peak' : 'peaks'} · {formatBytes(stats.bytes)}
-                </p>
-              </div>
-            </div>
-            <button
-              type="button"
-              onClick={clearCache}
-              disabled={clearing || stats.count === 0}
-              className="mt-4 flex min-h-11 w-full items-center justify-center gap-2 rounded-xl border border-red-500/30 bg-red-500/10 text-sm font-medium text-red-300 transition active:scale-[0.99] disabled:opacity-40"
-            >
-              <Trash2 size={16} />
-              {clearing ? 'Clearing…' : 'Clear offline cache'}
-            </button>
           </div>
         </section>
 

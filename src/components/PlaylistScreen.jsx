@@ -1,10 +1,10 @@
 // src/components/PlaylistScreen.jsx
 // Playlist detail screen (Section 8). Shows a playlist's ordered peaks with a big
-// Play, shuffle / loop-playlist toggles, a "make available offline" action, and a
-// per-row overflow menu (Play / Edit / Move / Delete). Pointer-based drag-to-
-// reorder rewrites order through the library store. This component is read-only
-// over playback state — all playback goes through the player store, which is the
-// single source of truth for the current index.
+// Play, shuffle / loop-playlist toggles, and a per-row overflow menu (Play / Edit
+// / Move / Delete). Pointer-based drag-to-reorder rewrites order through the
+// library store. This component is read-only over playback state — all playback
+// goes through the player store, which is the single source of truth for the
+// current index.
 
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { useLibraryStore } from '../store/libraryStore.js';
@@ -15,8 +15,6 @@ import {
   Play,
   Shuffle,
   Repeat,
-  Download,
-  CloudOff,
   GripVertical,
   MoreVertical,
   Edit,
@@ -74,52 +72,6 @@ export default function PlaylistScreen({ playlistId, onBack, onEditPeak }) {
 
   function cancelRename() {
     setRenaming(false);
-  }
-
-  // ---- offline caching ----
-  const [caching, setCaching] = useState(false);
-  const [cacheMsg, setCacheMsg] = useState(null);
-
-  async function makeOffline() {
-    if (caching || peaks.length === 0) return;
-    setCaching(true);
-    setCacheMsg(null);
-    try {
-      const { cached, failed } = await useLibraryStore.getState().cachePlaylist(playlistId);
-      setCacheMsg(
-        failed.length === 0
-          ? `Saved ${cached.length} for offline`
-          : `Saved ${cached.length}, ${failed.length} failed`
-      );
-    } catch (err) {
-      setCacheMsg(err.message || 'Caching failed');
-    } finally {
-      setCaching(false);
-    }
-  }
-
-  // ---- per-peak offline download / remove ----
-  const [downloadingId, setDownloadingId] = useState(null);
-
-  async function downloadPeak(peakId) {
-    closeMenus();
-    if (downloadingId) return;
-    setDownloadingId(peakId);
-    setCacheMsg(null);
-    try {
-      await useLibraryStore.getState().cachePeak(peakId);
-      setCacheMsg('Saved for offline');
-    } catch (err) {
-      setCacheMsg(err.message || 'Download failed');
-    } finally {
-      setDownloadingId(null);
-    }
-  }
-
-  async function removeDownload(peakId) {
-    closeMenus();
-    await useLibraryStore.getState().uncachePeak(peakId);
-    setCacheMsg('Removed download');
   }
 
   // ---- overflow menu (which row's menu is open) ----
@@ -344,23 +296,7 @@ export default function PlaylistScreen({ playlistId, onBack, onEditPeak }) {
             <Repeat size={20} />
           </button>
 
-          <button
-            type="button"
-            onClick={makeOffline}
-            disabled={caching || peaks.length === 0}
-            aria-label="Make available offline"
-            className="ml-auto flex min-h-11 items-center gap-2 rounded-full border border-zinc-800 bg-zinc-900 px-4 text-sm text-zinc-300 transition active:scale-95 disabled:opacity-40"
-          >
-            <Download size={18} className={caching ? 'animate-pulse text-emerald-400' : ''} />
-            <span>{caching ? 'Saving…' : 'Offline'}</span>
-          </button>
         </div>
-
-        {cacheMsg && (
-          <p className="mt-2 text-xs text-emerald-400" role="status">
-            {cacheMsg}
-          </p>
-        )}
 
         {/* Peak list */}
         {peaks.length === 0 ? (
@@ -386,7 +322,7 @@ export default function PlaylistScreen({ playlistId, onBack, onEditPeak }) {
                         : 'border-zinc-800'
                   }`}
                 >
-                  {/* Drag handle */}
+                  {/* Drag handle (reorder). */}
                   <button
                     type="button"
                     aria-label="Reorder peak"
@@ -409,21 +345,6 @@ export default function PlaylistScreen({ playlistId, onBack, onEditPeak }) {
                       {formatRange(peak.startSec, peak.endSec)}
                     </span>
                   </button>
-
-                  {/* Cached indicator */}
-                  <span
-                    className="flex min-h-11 min-w-9 items-center justify-center"
-                    aria-label={peak.cached ? 'Available offline' : 'Streaming only'}
-                    title={peak.cached ? 'Available offline' : 'Streaming only'}
-                  >
-                    {downloadingId === peak.id ? (
-                      <Download size={16} className="animate-pulse text-emerald-400" />
-                    ) : peak.cached ? (
-                      <Download size={16} className="text-emerald-400" />
-                    ) : (
-                      <CloudOff size={16} className="text-zinc-600" />
-                    )}
-                  </span>
 
                   {/* Overflow menu */}
                   <button
@@ -494,19 +415,6 @@ export default function PlaylistScreen({ playlistId, onBack, onEditPeak }) {
                               label="Edit"
                               onClick={() => editPeak(peak)}
                             />
-                            {peak.cached ? (
-                              <MenuItem
-                                icon={<CloudOff size={16} />}
-                                label="Remove download"
-                                onClick={() => removeDownload(peak.id)}
-                              />
-                            ) : (
-                              <MenuItem
-                                icon={<Download size={16} />}
-                                label={downloadingId === peak.id ? 'Downloading…' : 'Download for offline'}
-                                onClick={() => downloadPeak(peak.id)}
-                              />
-                            )}
                             <MenuItem
                               icon={<ListMusic size={16} />}
                               label="Move to playlist"
