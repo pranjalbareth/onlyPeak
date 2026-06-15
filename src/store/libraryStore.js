@@ -1,0 +1,356 @@
+// src/store/libraryStore.js
+// Zustand store for the persistent library: playlists, peaks, songs, settings,
+// plus transient search state. Every mutation writes through to IndexedDB
+// (src/db) so the in-memory state and the DB never drift. The player store reads
+// peak/playlist data from the DB directly, but this store owns all writes.
+
+import { create } from 'zustand';
+import { v4 as uuidv4 } from 'uuid';
+import * as db from '../db/index.js';
+import * as api from '../lib/api.js';
+
+const RECENTS_CAP = 12;
+
+// Monotonic search generation. Each search() captures the latest value; a later
+// search() or clearSearch() bumps it, so a stale in-flight response can detect
+// that it's no longer current and skip applying its results.
+let searchSeq = 0;
+
+/**
+ * Prepend an id to a recents list, de-duplicating and capping length.
+ * @param {string[]} list @param {string} id @returns {string[]}
+ */
+function pushRecent(list, id) {
+  const next = [id, ...list.filter((x) => x !== id)];
+  return next.slice(0, RECENTS_CAP);
+}
+
+export const useLibraryStore = create((set, get) => ({
+  // ---- persisted, mirrored from IndexedDB ----
+  playlists: [],          // Playlist[]
+  peaksById: {},          // { [peakId]: Peak }
+  songsById: {},          // { [videoId]: Song }
+  settings: null,         // Settings (null until init())
+  recentPeakIds: [],      // mirror of settings.recentPeakIds
+
+  // ---- transient search state ----
+  searchResults: [],      // Song[]
+  searching: false,
+  searchError: null,
+
+  /**
+   * Hydrate the store from IndexedDB and apply forward migrations. Call once at
+   * app boot before rendering library UI.
+   */
+  async init() {
+    await db.runMigrations();
+    const [playlists, peaks, songs, settings] = await Promise.all([
+      db.getAllPlaylists(),
+      db.getAllPeaks(),
+      db.getAllSongs(),
+      db.getSettings(),
+    ]);
+    const peaksById = {};
+    for (const p of peaks) peaksById[p.id] = p;
+    const songsById = {};
+    for (const s of songs) songsById[s.videoId] = s;
+    set({
+      playlists,
+      peaksById,
+      songsById,
+      settings,
+      recentPeakIds: settings.recentPeakIds || [],
+    });
+  },
+
+  /**
+   * Run a backend search, managing searching/searchError and storing results.
+   */
+  async search(q) {
+    const query = (q || '').trim();
+    if (!query) {
+      searchSeq += 1; // invalidate any in-flight search
+      set({ searchResults: [], searching: false, searchError: null });
+      return;
+    }
+    const seq = ++searchSeq;
+    set({ searching: true, searchError: null });
+    try {
+      const results = await api.searchSongs(query);
+      if (seq !== searchSeq) return; // a newer search/clear superseded this one
+      set({ searchResults: results, searching: false });
+    } catch (err) {
+      if (seq !== searchSeq) return;
+      set({ searchResults: [], searching: false, searchError: err.message || String(err) });
+    }
+  },
+
+  /** Clear search results and error (also invalidates any in-flight search). */
+  clearSearch() {
+    searchSeq += 1;
+    set({ searchResults: [], searching: false, searchError: null });
+  },
+
+  /** Number of peaks the library has for a given videoId (for the "N peaks" badge). */
+  getPeakCountByVideoId(videoId) {
+    const { peaksById } = get();
+    let n = 0;
+    for (const id in peaksById) {
+      if (peaksById[id].videoId === videoId) n++;
+    }
+    return n;
+  },
+
+  /**
+   * Create a new (empty) playlist and persist it.
+   * @returns {Promise<object>} the created playlist
+   */
+  async createPlaylist(name) {
+    const playlist = {
+      id: uuidv4(),
+      name: name || 'New Playlist',
+      peakIds: [],
+      createdAt: Date.now(),
+    };
+    await db.putPlaylist(playlist);
+    set((s) => ({ playlists: [...s.playlists, playlist] }));
+    return playlist;
+  },
+
+  /** Rename a playlist and persist. */
+  async renamePlaylist(id, name) {
+    const playlist = get().playlists.find((p) => p.id === id);
+    if (!playlist) return;
+    const updated = { ...playlist, name };
+    await db.putPlaylist(updated);
+    set((s) => ({ playlists: s.playlists.map((p) => (p.id === id ? updated : p)) }));
+  },
+
+  /** Delete a playlist (peaks are left intact; they may live in other playlists). */
+  async deletePlaylist(id) {
+    await db.deletePlaylist(id);
+    set((s) => {
+      const patch = { playlists: s.playlists.filter((p) => p.id !== id) };
+      if (s.settings?.lastPlaylistId === id) {
+        patch.settings = { ...s.settings, lastPlaylistId: null };
+      }
+      return patch;
+    });
+    if (get().settings?.lastPlaylistId === null) {
+      await db.putSettings({ lastPlaylistId: null });
+    }
+  },
+
+  /**
+   * Create OR update a peak (the Peak Editor's save). When `id` is present the
+   * existing peak is updated in place; otherwise a new peak is created (uuid id,
+   * createdAt, cached:false) and appended to the target playlist. Always upserts
+   * the underlying Song, records lastPlaylistId, and pushes the peak onto recents.
+   * @param {{id?:string,videoId:string,title:string,startSec:number,endSec:number,song?:object}} input
+   * @param {string} playlistId  target playlist (used on create; ignored on update)
+   * @returns {Promise<object>} the saved peak
+   */
+  async savePeak({ id, videoId, title, startSec, endSec, song }, playlistId) {
+    const isUpdate = Boolean(id);
+    let peak;
+
+    if (isUpdate) {
+      const existing = get().peaksById[id];
+      peak = {
+        ...existing,
+        id,
+        videoId,
+        title,
+        startSec,
+        endSec,
+      };
+      // If the range changed on a cached peak, the stored clip blob is now stale
+      // (it was trimmed to the OLD [start,end]). Drop the blob and clear cached so
+      // playback falls back to the online stream with the new bounds; the user can
+      // re-cache. Otherwise the edited range would be silently ignored on playback.
+      if (existing?.cached && (existing.startSec !== startSec || existing.endSec !== endSec)) {
+        peak.cached = false;
+        await db.deleteAudioBlob(id);
+      }
+    } else {
+      peak = {
+        id: uuidv4(),
+        videoId,
+        title,
+        startSec,
+        endSec,
+        createdAt: Date.now(),
+        cached: false,
+      };
+    }
+
+    await db.putPeak(peak);
+
+    // Always upsert the Song so metadata survives even if not searched again.
+    if (song) {
+      await db.putSong(song);
+    }
+
+    // On create, append to the chosen playlist.
+    let updatedPlaylist = null;
+    if (!isUpdate && playlistId) {
+      const playlist = get().playlists.find((p) => p.id === playlistId);
+      if (playlist && !playlist.peakIds.includes(peak.id)) {
+        updatedPlaylist = { ...playlist, peakIds: [...playlist.peakIds, peak.id] };
+        await db.putPlaylist(updatedPlaylist);
+      }
+    }
+
+    // Persist lastPlaylistId + recents via settings.
+    const nextRecents = pushRecent(get().recentPeakIds, peak.id);
+    const nextSettings = await db.putSettings({
+      lastPlaylistId: playlistId || get().settings?.lastPlaylistId || null,
+      recentPeakIds: nextRecents,
+    });
+
+    set((s) => ({
+      peaksById: { ...s.peaksById, [peak.id]: peak },
+      songsById: song ? { ...s.songsById, [song.videoId]: song } : s.songsById,
+      playlists: updatedPlaylist
+        ? s.playlists.map((p) => (p.id === updatedPlaylist.id ? updatedPlaylist : p))
+        : s.playlists,
+      settings: nextSettings,
+      recentPeakIds: nextRecents,
+    }));
+
+    return peak;
+  },
+
+  /**
+   * Delete a peak everywhere: DB cascade (blob + playlist refs) then mirror into
+   * state (peaksById, playlists.peakIds, recents).
+   */
+  async deletePeak(id) {
+    await db.deletePeak(id); // also drops the audio blob and removes id from all playlists
+    set((s) => {
+      const peaksById = { ...s.peaksById };
+      delete peaksById[id];
+      return {
+        peaksById,
+        playlists: s.playlists.map((p) =>
+          p.peakIds.includes(id) ? { ...p, peakIds: p.peakIds.filter((x) => x !== id) } : p
+        ),
+        recentPeakIds: s.recentPeakIds.filter((x) => x !== id),
+      };
+    });
+    // Keep persisted recents in sync.
+    await db.putSettings({ recentPeakIds: get().recentPeakIds });
+  },
+
+  /** Add an existing peak to a playlist (no-op if already present). */
+  async addPeakToPlaylist(peakId, playlistId) {
+    const playlist = get().playlists.find((p) => p.id === playlistId);
+    if (!playlist || playlist.peakIds.includes(peakId)) return;
+    const updated = { ...playlist, peakIds: [...playlist.peakIds, peakId] };
+    await db.putPlaylist(updated);
+    set((s) => ({ playlists: s.playlists.map((p) => (p.id === playlistId ? updated : p)) }));
+  },
+
+  /** Remove a peak from a single playlist (the peak itself is untouched). */
+  async removePeakFromPlaylist(peakId, playlistId) {
+    const playlist = get().playlists.find((p) => p.id === playlistId);
+    if (!playlist || !playlist.peakIds.includes(peakId)) return;
+    const updated = { ...playlist, peakIds: playlist.peakIds.filter((x) => x !== peakId) };
+    await db.putPlaylist(updated);
+    set((s) => ({ playlists: s.playlists.map((p) => (p.id === playlistId ? updated : p)) }));
+  },
+
+  /** Move a peak from one playlist to another. */
+  async movePeakToPlaylist(peakId, fromId, toId) {
+    if (fromId === toId) return;
+    await get().removePeakFromPlaylist(peakId, fromId);
+    await get().addPeakToPlaylist(peakId, toId);
+  },
+
+  /** Reorder a peak within a playlist (drag-to-reorder). */
+  async reorderPlaylist(playlistId, fromIndex, toIndex) {
+    const playlist = get().playlists.find((p) => p.id === playlistId);
+    if (!playlist) return;
+    const ids = [...playlist.peakIds];
+    if (
+      fromIndex < 0 ||
+      fromIndex >= ids.length ||
+      toIndex < 0 ||
+      toIndex >= ids.length ||
+      fromIndex === toIndex
+    ) {
+      return;
+    }
+    const [moved] = ids.splice(fromIndex, 1);
+    ids.splice(toIndex, 0, moved);
+    const updated = { ...playlist, peakIds: ids };
+    await db.putPlaylist(updated);
+    set((s) => ({ playlists: s.playlists.map((p) => (p.id === playlistId ? updated : p)) }));
+  },
+
+  /** Ordered peaks for a playlist, resolved from peaksById (skips missing ids). */
+  getPeaksForPlaylist(playlistId) {
+    const { playlists, peaksById } = get();
+    const playlist = playlists.find((p) => p.id === playlistId);
+    if (!playlist) return [];
+    return playlist.peakIds.map((id) => peaksById[id]).filter(Boolean);
+  },
+
+  /**
+   * Download + store a peak's clip blob, then mark the peak cached (persisted).
+   */
+  async cachePeak(peakId) {
+    const peak = get().peaksById[peakId];
+    if (!peak) return;
+    const blob = await api.fetchClipBlob(peak.videoId, peak.startSec, peak.endSec);
+    await db.putAudioBlob(peakId, blob);
+    const updated = { ...peak, cached: true };
+    await db.putPeak(updated);
+    set((s) => ({ peaksById: { ...s.peaksById, [peakId]: updated } }));
+  },
+
+  /** Drop a peak's cached clip blob and clear its cached flag (persisted). */
+  async uncachePeak(peakId) {
+    const peak = get().peaksById[peakId];
+    await db.deleteAudioBlob(peakId);
+    if (!peak) return;
+    const updated = { ...peak, cached: false };
+    await db.putPeak(updated);
+    set((s) => ({ peaksById: { ...s.peaksById, [peakId]: updated } }));
+  },
+
+  /**
+   * Cache every peak in a playlist for offline use. Tolerates per-peak failures
+   * (e.g. deleted source video) and returns which succeeded/failed.
+   * @returns {Promise<{cached:string[],failed:Array<{peakId:string,error:string}>}>}
+   */
+  async cachePlaylist(playlistId) {
+    const peaks = get().getPeaksForPlaylist(playlistId);
+    const cached = [];
+    const failed = [];
+    for (const peak of peaks) {
+      try {
+        await get().cachePeak(peak.id);
+        cached.push(peak.id);
+      } catch (err) {
+        failed.push({ peakId: peak.id, error: err.message || String(err) });
+      }
+    }
+    return { cached, failed };
+  },
+
+  /** Drop all cached clip blobs and clear every peak's cached flag (persisted). */
+  async clearAllCache() {
+    const peaks = Object.values(get().peaksById);
+    for (const peak of peaks) {
+      await db.deleteAudioBlob(peak.id);
+    }
+    const peaksById = {};
+    for (const peak of peaks) {
+      const updated = { ...peak, cached: false };
+      await db.putPeak(updated);
+      peaksById[peak.id] = updated;
+    }
+    set({ peaksById });
+  },
+}));
